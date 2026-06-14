@@ -1,0 +1,15 @@
+soccerdata
+pandas
+numpy
+scikit-learn
+xgboost
+optuna
+shap
+statsmodels
+rapidfuzz
+matplotlib
+seaborn
+plotly
+pyarrow        # parquet support
+jupyter
+notebook
