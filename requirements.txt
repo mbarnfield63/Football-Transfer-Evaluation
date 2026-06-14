@@ -6,10 +6,11 @@ xgboost
 optuna
 shap
 statsmodels
-rapidfuzz
 matplotlib
 seaborn
 plotly
 pyarrow        # parquet support
 jupyter
 notebook
+kaggle
+duckdb
