@@ -11,6 +11,9 @@ venv/
 # Data — never commit raw scraped data
 data/
 
+# Trained model artifacts
+models/
+
 # Reports
 reports/
 

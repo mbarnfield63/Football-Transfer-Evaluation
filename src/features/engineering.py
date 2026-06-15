@@ -28,6 +28,8 @@ MIN_MINUTES = 90  # drop player-seasons below this to avoid noise
 # SQL: step 1 — per-player-season stats from appearances + games
 # ---------------------------------------------------------------------------
 
+_TOP5_SQL = ', '.join(f"'{c}'" for c in TOP5_COMPETITION_IDS)
+
 _STATS_SQL = f"""
 WITH season_stats AS (
     SELECT
@@ -43,13 +45,12 @@ WITH season_stats AS (
     FROM appearances a
     JOIN games g ON g.game_id = a.game_id
     WHERE
-        a.competition_id IN ({', '.join(f"'{c}'" for c in TOP5_COMPETITION_IDS)})
+        a.competition_id IN ({_TOP5_SQL})
         AND g.season BETWEEN {SEASON_MIN} AND {SEASON_MAX}
         AND a.minutes_played > 0
     GROUP BY a.player_id, g.season, a.competition_id
 ),
 
--- static player attributes
 player_attrs AS (
     SELECT
         player_id,
@@ -73,11 +74,94 @@ season_valuations AS (
             WHEN MONTH(date) >= 7 THEN YEAR(date)
             ELSE YEAR(date) - 1
         END                    AS season,
-        -- latest valuation in the window
         LAST(market_value_in_eur ORDER BY date) AS market_value_in_eur
     FROM player_valuations
     WHERE market_value_in_eur IS NOT NULL
     GROUP BY player_id, season
+),
+
+-- primary club per player-season: most minutes wins (handles Jan movers)
+primary_club AS (
+    SELECT a.player_id, g.competition_id, g.season, a.player_club_id AS primary_club_id
+    FROM appearances a
+    JOIN games g ON g.game_id = a.game_id
+    WHERE g.competition_id IN ({_TOP5_SQL})
+      AND g.season BETWEEN {SEASON_MIN - 1} AND {SEASON_MAX}
+    GROUP BY a.player_id, g.competition_id, g.season, a.player_club_id
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY a.player_id, g.competition_id, g.season
+        ORDER BY SUM(a.minutes_played) DESC
+    ) = 1
+),
+
+-- club-season total goals (home + away combined)
+team_goals AS (
+    WITH home_g AS (
+        SELECT home_club_id AS club_id, competition_id, season,
+               SUM(home_club_goals) AS goals
+        FROM games
+        WHERE competition_id IN ({_TOP5_SQL})
+          AND season BETWEEN {SEASON_MIN - 1} AND {SEASON_MAX}
+        GROUP BY home_club_id, competition_id, season
+    ),
+    away_g AS (
+        SELECT away_club_id AS club_id, competition_id, season,
+               SUM(away_club_goals) AS goals
+        FROM games
+        WHERE competition_id IN ({_TOP5_SQL})
+          AND season BETWEEN {SEASON_MIN - 1} AND {SEASON_MAX}
+        GROUP BY away_club_id, competition_id, season
+    )
+    SELECT
+        COALESCE(h.club_id, a.club_id)               AS club_id,
+        COALESCE(h.competition_id, a.competition_id) AS competition_id,
+        COALESCE(h.season, a.season)                 AS season,
+        COALESCE(h.goals, 0) + COALESCE(a.goals, 0) AS team_goals_scored
+    FROM home_g h
+    FULL OUTER JOIN away_g a
+        ON h.club_id = a.club_id
+        AND h.competition_id = a.competition_id
+        AND h.season = a.season
+),
+
+-- club-season player-share totals (for pct_team_minutes / pct_team_goals)
+team_totals AS (
+    SELECT
+        a.player_club_id  AS club_id,
+        g.competition_id,
+        g.season,
+        SUM(a.minutes_played) AS team_total_minutes,
+        SUM(a.goals)          AS team_total_goals,
+        SUM(a.assists)        AS team_total_assists
+    FROM appearances a
+    JOIN games g ON g.game_id = a.game_id
+    WHERE g.competition_id IN ({_TOP5_SQL})
+      AND g.season BETWEEN {SEASON_MIN - 1} AND {SEASON_MAX}
+    GROUP BY a.player_club_id, g.competition_id, g.season
+),
+
+-- club incoming transfer spend per season
+club_spending AS (
+    SELECT
+        to_club_id AS club_id,
+        (2000 + CAST(SPLIT_PART(transfer_season, '/', 1) AS INTEGER)) AS season,
+        SUM(transfer_fee) AS club_transfer_spending
+    FROM transfers
+    WHERE transfer_fee > 0
+    GROUP BY to_club_id, season
+),
+
+-- league incoming transfer spend per season
+league_spending AS (
+    SELECT
+        cl.domestic_competition_id AS competition_id,
+        (2000 + CAST(SPLIT_PART(t.transfer_season, '/', 1) AS INTEGER)) AS season,
+        SUM(t.transfer_fee) AS league_transfer_spending
+    FROM transfers t
+    JOIN clubs cl ON cl.club_id = t.to_club_id
+    WHERE cl.domestic_competition_id IN ({_TOP5_SQL})
+      AND t.transfer_fee > 0
+    GROUP BY cl.domestic_competition_id, season
 )
 
 SELECT
@@ -92,10 +176,8 @@ SELECT
     pa.foot,
     pa.international_caps,
 
-    -- age at start of season (Aug 1)
     s.season - YEAR(pa.date_of_birth) AS age,
 
-    -- counting stats
     s.appearances,
     s.goals,
     s.assists,
@@ -103,12 +185,38 @@ SELECT
     s.yellow_cards,
     s.red_cards,
 
-    -- valuation target
+    pc.primary_club_id,
+    COALESCE(tg.team_goals_scored, 0)                            AS team_goals_scored,
+    COALESCE(tt.team_total_minutes, 0)                           AS team_total_minutes,
+    COALESCE(tt.team_total_goals, 0)                             AS team_total_goals,
+    s.minutes_played * 100.0 / NULLIF(tt.team_total_minutes, 0) AS pct_team_minutes,
+    s.goals * 100.0 / NULLIF(tt.team_total_goals, 0)            AS pct_team_goals,
+    COALESCE(cs.club_transfer_spending, 0)                       AS club_transfer_spending,
+    COALESCE(ls.league_transfer_spending, 0)                     AS league_transfer_spending,
+
     sv.market_value_in_eur
 FROM season_stats s
 JOIN player_attrs pa ON pa.player_id = s.player_id
 LEFT JOIN season_valuations sv
     ON sv.player_id = s.player_id AND sv.season = s.season
+LEFT JOIN primary_club pc
+    ON pc.player_id = s.player_id
+    AND pc.competition_id = s.competition_id
+    AND pc.season = s.season
+LEFT JOIN team_goals tg
+    ON tg.club_id = pc.primary_club_id
+    AND tg.competition_id = s.competition_id
+    AND tg.season = s.season
+LEFT JOIN team_totals tt
+    ON tt.club_id = pc.primary_club_id
+    AND tt.competition_id = s.competition_id
+    AND tt.season = s.season
+LEFT JOIN club_spending cs
+    ON cs.club_id = pc.primary_club_id
+    AND cs.season = s.season
+LEFT JOIN league_spending ls
+    ON ls.competition_id = s.competition_id
+    AND ls.season = s.season
 WHERE s.minutes_played >= {MIN_MINUTES}
 ORDER BY s.player_id, s.season
 """

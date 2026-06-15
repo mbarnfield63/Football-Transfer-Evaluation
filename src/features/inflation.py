@@ -15,9 +15,11 @@ Run:
 
 from pathlib import Path
 
+import duckdb
 import numpy as np
 import pandas as pd
 
+DB_PATH = Path(__file__).parents[2] / "data" / "transfermarkt.duckdb"
 FEATURES_DIR = Path(__file__).parents[2] / "data" / "features"
 PARQUET_PATH = FEATURES_DIR / "feature_matrix.parquet"
 
@@ -46,6 +48,38 @@ def add_relative_value(
     df["log_relative_value"] = lv - median_lv
 
     return df
+
+
+# ---------------------------------------------------------------------------
+# Transfer fee inflation index
+# ---------------------------------------------------------------------------
+
+_TOP5 = ("'GB1','L1','ES1','IT1','FR1'")
+
+_FEE_INDEX_SQL = f"""
+SELECT
+    (2000 + CAST(SPLIT_PART(t.transfer_season, '/', 1) AS INTEGER)) AS season_int,
+    MEDIAN(t.transfer_fee) AS median_fee
+FROM transfers t
+JOIN clubs fc ON fc.club_id = t.from_club_id
+JOIN clubs tc ON tc.club_id = t.to_club_id
+WHERE t.transfer_fee > 0
+  AND (fc.domestic_competition_id IN ({_TOP5})
+       OR tc.domestic_competition_id IN ({_TOP5}))
+GROUP BY season_int
+ORDER BY season_int
+"""
+
+
+def build_fee_inflation_index(con: duckdb.DuckDBPyConnection) -> dict[int, float]:
+    """Median top-5 transfer fee per season. Returns {{season_int: median_fee}}."""
+    rows = con.execute(_FEE_INDEX_SQL).fetchall()
+    return {int(season): float(median) for season, median in rows}
+
+
+def inflation_adjust_fee(fee: float, season_int: int, index: dict[int, float]) -> float:
+    """Return fee / index[season_int]."""
+    return fee / index[season_int]
 
 
 # ---------------------------------------------------------------------------
