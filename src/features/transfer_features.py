@@ -15,7 +15,11 @@ Output:
     data/features/transfer_dataset.parquet
 """
 
+import sys
 from pathlib import Path
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 import duckdb
 import numpy as np
@@ -43,6 +47,7 @@ top5_transfers AS (
         t.player_name,
         t.from_club_id,
         t.transfer_fee,
+        t.transfer_date,
         (2000 + CAST(SPLIT_PART(t.transfer_season, '/', 1) AS INTEGER)) AS season_int,
         fc.domestic_competition_id AS from_competition_id
     FROM transfers t
@@ -165,11 +170,18 @@ inflation_index AS (
       AND (fc.domestic_competition_id IN ({_TOP5})
            OR tc.domestic_competition_id IN ({_TOP5}))
     GROUP BY season_int
+),
+
+-- FIFA contract lookup (one row per player-season; populated by fifa_loader)
+contract_data AS (
+    SELECT player_id, season_int, contract_valid_until
+    FROM fifa_contract_lookup
 )
 
 SELECT
     tr.player_id,
     tr.player_name,
+    tr.transfer_date,
     tr.season_int,
     tr.from_competition_id,
     tr.transfer_fee,
@@ -198,7 +210,15 @@ SELECT
 
     -- market context (current window)
     COALESCE(ls.league_transfer_spending, 0)                     AS from_league_spending,
-    ii.median_fee                                                AS inflation_median_fee
+    ii.median_fee                                                AS inflation_median_fee,
+
+    -- contract at time of transfer (FIFA dataset; NULL if player not matched)
+    CASE
+        WHEN cd.contract_valid_until IS NOT NULL
+        THEN DATEDIFF('month', tr.transfer_date, MAKE_DATE(cd.contract_valid_until, 6, 30))
+        ELSE NULL
+    END AS contract_months_remaining_raw,
+    CASE WHEN cd.contract_valid_until IS NOT NULL THEN 1 ELSE 0 END AS has_contract_data
 
 FROM top5_transfers tr
 JOIN player_attrs pa ON pa.player_id = tr.player_id
@@ -221,6 +241,9 @@ LEFT JOIN league_spending ls
     AND ls.season_int = tr.season_int
 LEFT JOIN inflation_index ii
     ON ii.season_int = tr.season_int
+LEFT JOIN contract_data cd
+    ON cd.player_id  = tr.player_id
+    AND cd.season_int = tr.season_int
 WHERE ps.player_id IS NOT NULL
 ORDER BY tr.season_int, tr.player_id
 """
@@ -262,6 +285,9 @@ def _add_python_features(df: pd.DataFrame) -> pd.DataFrame:
         df["transfer_fee"] / df["inflation_median_fee"]
     )
 
+    # contract feature — clip to [0, 60] months; NaN where scraper hasn't run
+    df["contract_months_remaining"] = df["contract_months_remaining_raw"].clip(lower=0, upper=60)
+
     return df
 
 
@@ -275,7 +301,19 @@ def build_transfer_dataset(
             "Run: uv run python -m src.scraping.tm_scraper"
         )
 
-    con = duckdb.connect(str(db_path), read_only=True)
+    con = duckdb.connect(str(db_path))
+    # Ensure FIFA contract lookup table exists so the CTE works even before fifa_loader runs.
+    # If empty, contract columns will be all-NaN (XGBoost handles this natively).
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS fifa_contract_lookup (
+            player_id            INTEGER NOT NULL,
+            season_int           INTEGER NOT NULL,
+            contract_valid_until INTEGER NOT NULL,
+            match_score          REAL,
+            fifa_player_name     VARCHAR,
+            PRIMARY KEY (player_id, season_int)
+        )
+    """)
     df = con.execute(_TRANSFER_SQL).fetchdf()
     con.close()
 

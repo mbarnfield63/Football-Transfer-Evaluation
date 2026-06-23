@@ -62,6 +62,9 @@ FEATURE_COLS = [
     "league_tier",
     "from_league_spending",
     "season_int",
+    # contract (NaN until contract_scraper has been run; XGBoost handles natively)
+    "contract_months_remaining",
+    "has_contract_data",
 ]
 
 # Walk-forward folds: (train_seasons_max, val_season)
