@@ -108,6 +108,10 @@ def plot_shap(model: xgb.XGBRegressor, X: pd.DataFrame, out_dir: Path) -> None:
         feature_names=list(X.columns),
     )
 
+    mean_abs = pd.Series(np.abs(shap_matrix).mean(axis=0), index=list(X.columns))
+    print("\nTop-15 mean |SHAP|:")
+    print(mean_abs.sort_values(ascending=False).head(15).to_string())
+
     # bar summary
     fig, ax = plt.subplots(figsize=(8, 6))
     shap.plots.bar(shap_values, max_display=15, show=False, ax=ax)
