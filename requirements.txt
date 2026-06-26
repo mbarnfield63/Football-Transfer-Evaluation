@@ -1,4 +1,3 @@
-soccerdata
 pandas
 numpy
 scikit-learn

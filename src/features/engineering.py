@@ -17,7 +17,7 @@ import pandas as pd
 DB_PATH = Path(__file__).parents[2] / "data" / "transfermarkt.duckdb"
 FEATURES_DIR = Path(__file__).parents[2] / "data" / "features"
 
-TOP5_COMPETITION_IDS = ("GB1", "L1", "ES1", "IT1", "FR1")
+COMPETITION_IDS = ("GB1", "L1", "ES1", "IT1", "FR1", "PO1", "NL1", "BE1", "SC1", "TR1")
 
 SEASON_MIN = 2017
 SEASON_MAX = 2025
@@ -28,7 +28,7 @@ MIN_MINUTES = 90  # drop player-seasons below this to avoid noise
 # SQL: step 1 — per-player-season stats from appearances + games
 # ---------------------------------------------------------------------------
 
-_TOP5_SQL = ', '.join(f"'{c}'" for c in TOP5_COMPETITION_IDS)
+_COMP_SQL = ', '.join(f"'{c}'" for c in COMPETITION_IDS)
 
 _STATS_SQL = f"""
 WITH season_stats AS (
@@ -45,7 +45,7 @@ WITH season_stats AS (
     FROM appearances a
     JOIN games g ON g.game_id = a.game_id
     WHERE
-        a.competition_id IN ({_TOP5_SQL})
+        a.competition_id IN ({_COMP_SQL})
         AND g.season BETWEEN {SEASON_MIN} AND {SEASON_MAX}
         AND a.minutes_played > 0
     GROUP BY a.player_id, g.season, a.competition_id
@@ -85,7 +85,7 @@ primary_club AS (
     SELECT a.player_id, g.competition_id, g.season, a.player_club_id AS primary_club_id
     FROM appearances a
     JOIN games g ON g.game_id = a.game_id
-    WHERE g.competition_id IN ({_TOP5_SQL})
+    WHERE g.competition_id IN ({_COMP_SQL})
       AND g.season BETWEEN {SEASON_MIN - 1} AND {SEASON_MAX}
     GROUP BY a.player_id, g.competition_id, g.season, a.player_club_id
     QUALIFY ROW_NUMBER() OVER (
@@ -100,7 +100,7 @@ team_goals AS (
         SELECT home_club_id AS club_id, competition_id, season,
                SUM(home_club_goals) AS goals
         FROM games
-        WHERE competition_id IN ({_TOP5_SQL})
+        WHERE competition_id IN ({_COMP_SQL})
           AND season BETWEEN {SEASON_MIN - 1} AND {SEASON_MAX}
         GROUP BY home_club_id, competition_id, season
     ),
@@ -108,7 +108,7 @@ team_goals AS (
         SELECT away_club_id AS club_id, competition_id, season,
                SUM(away_club_goals) AS goals
         FROM games
-        WHERE competition_id IN ({_TOP5_SQL})
+        WHERE competition_id IN ({_COMP_SQL})
           AND season BETWEEN {SEASON_MIN - 1} AND {SEASON_MAX}
         GROUP BY away_club_id, competition_id, season
     )
@@ -135,7 +135,7 @@ team_totals AS (
         SUM(a.assists)        AS team_total_assists
     FROM appearances a
     JOIN games g ON g.game_id = a.game_id
-    WHERE g.competition_id IN ({_TOP5_SQL})
+    WHERE g.competition_id IN ({_COMP_SQL})
       AND g.season BETWEEN {SEASON_MIN - 1} AND {SEASON_MAX}
     GROUP BY a.player_club_id, g.competition_id, g.season
 ),
@@ -159,7 +159,7 @@ league_spending AS (
         SUM(t.transfer_fee) AS league_transfer_spending
     FROM transfers t
     JOIN clubs cl ON cl.club_id = t.to_club_id
-    WHERE cl.domestic_competition_id IN ({_TOP5_SQL})
+    WHERE cl.domestic_competition_id IN ({_COMP_SQL})
       AND t.transfer_fee > 0
     GROUP BY cl.domestic_competition_id, season
 )
@@ -194,7 +194,9 @@ SELECT
     COALESCE(cs.club_transfer_spending, 0)                       AS club_transfer_spending,
     COALESCE(ls.league_transfer_spending, 0)                     AS league_transfer_spending,
 
-    sv.market_value_in_eur
+    sv.market_value_in_eur,
+    fb.xg,
+    fb.progressive_carries
 FROM season_stats s
 JOIN player_attrs pa ON pa.player_id = s.player_id
 LEFT JOIN season_valuations sv
@@ -217,6 +219,9 @@ LEFT JOIN club_spending cs
 LEFT JOIN league_spending ls
     ON ls.competition_id = s.competition_id
     AND ls.season = s.season
+LEFT JOIN fbref_stats fb
+    ON fb.player_id = s.player_id
+    AND fb.season = s.season
 WHERE s.minutes_played >= {MIN_MINUTES}
 ORDER BY s.player_id, s.season
 """
@@ -256,6 +261,8 @@ def _add_derived_features(df: pd.DataFrame) -> pd.DataFrame:
     df["assists_per90"] = df["assists"] / p90
     df["goal_contributions_per90"] = (df["goals"] + df["assists"]) / p90
     df["yellows_per90"] = df["yellow_cards"] / p90
+    df["xg_per90"]                  = df["xg"]                  / p90
+    df["progressive_carries_per90"] = df["progressive_carries"] / p90
 
     # position group
     df["position_group"] = (
@@ -297,7 +304,15 @@ def build_feature_matrix(db_path: Path = DB_PATH, out_dir: Path = FEATURES_DIR) 
             "Run: uv run python -m src.scraping.tm_scraper"
         )
 
-    con = duckdb.connect(str(db_path), read_only=True)
+    con = duckdb.connect(str(db_path))
+    # ponytail: stub so the LEFT JOIN works before fbref_loader has been run
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS fbref_stats (
+            player_id INTEGER NOT NULL, season INTEGER NOT NULL,
+            xg DOUBLE, progressive_carries DOUBLE, fbref_player_name VARCHAR,
+            PRIMARY KEY (player_id, season)
+        )
+    """)
     df = con.execute(_STATS_SQL).fetchdf()
     con.close()
 

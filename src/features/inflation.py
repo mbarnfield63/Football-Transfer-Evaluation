@@ -54,7 +54,7 @@ def add_relative_value(
 # Transfer fee inflation index
 # ---------------------------------------------------------------------------
 
-_TOP5 = ("'GB1','L1','ES1','IT1','FR1'")
+_COMP_IDS = "'GB1','L1','ES1','IT1','FR1','PO1','NL1','BE1','SC1','TR1'"
 
 _FEE_INDEX_SQL = f"""
 SELECT
@@ -64,8 +64,8 @@ FROM transfers t
 JOIN clubs fc ON fc.club_id = t.from_club_id
 JOIN clubs tc ON tc.club_id = t.to_club_id
 WHERE t.transfer_fee > 0
-  AND (fc.domestic_competition_id IN ({_TOP5})
-       OR tc.domestic_competition_id IN ({_TOP5}))
+  AND (fc.domestic_competition_id IN ({_COMP_IDS})
+       OR tc.domestic_competition_id IN ({_COMP_IDS}))
 GROUP BY season_int
 ORDER BY season_int
 """

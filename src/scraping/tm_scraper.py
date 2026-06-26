@@ -21,15 +21,20 @@ DB_PATH = Path(__file__).parents[2] / "data" / "transfermarkt.duckdb"
 KAGGLE_DATASET = "davidcariboo/player-scores"
 
 # Top-5 league competition IDs as used by Transfermarkt / this dataset
-TOP5_COMPETITION_IDS = {
-    "ENG-Premier League": "GB1",
-    "GER-Bundesliga": "L1",
-    "ESP-La Liga": "ES1",
-    "ITA-Serie A": "IT1",
-    "FRA-Ligue 1": "FR1",
+COMPETITION_IDS = {
+    "ENG-Premier League":       "GB1",
+    "GER-Bundesliga":           "L1",
+    "ESP-La Liga":              "ES1",
+    "ITA-Serie A":              "IT1",
+    "FRA-Ligue 1":              "FR1",
+    "POR-Liga Portugal":        "PO1",
+    "NED-Eredivisie":           "NL1",
+    "BEL-Jupiler Pro League":   "BE1",
+    "SCO-Scottish Premiership": "SC1",
+    "TUR-Süper Lig":            "TR1",
 }
 
-LEAGUES = list(TOP5_COMPETITION_IDS.keys())
+LEAGUES = list(COMPETITION_IDS.keys())
 SEASONS = list(range(2017, 2026))
 
 
@@ -115,7 +120,7 @@ def scrape_valuations(leagues: list[str] = LEAGUES, seasons: list[int] = SEASONS
     Key columns: player_id, player_name, competition_id, season, club_id,
                  market_value_in_eur, date, nationality, position, age
     """
-    comp_ids = [TOP5_COMPETITION_IDS[l] for l in leagues if l in TOP5_COMPETITION_IDS]
+    comp_ids = [COMPETITION_IDS[l] for l in leagues if l in COMPETITION_IDS]
     comp_ids_sql = ", ".join(f"'{c}'" for c in comp_ids)
 
     season_min, season_max = min(seasons), max(seasons)
@@ -160,7 +165,7 @@ def scrape_transfers(leagues: list[str] = LEAGUES, seasons: list[int] = SEASONS)
     Key columns: player_id, player_name, season, transfer_fee,
                  from_club_id, to_club_id, from_competition_id, to_competition_id
     """
-    comp_ids = [TOP5_COMPETITION_IDS[l] for l in leagues if l in TOP5_COMPETITION_IDS]
+    comp_ids = [COMPETITION_IDS[l] for l in leagues if l in COMPETITION_IDS]
     comp_ids_sql = ", ".join(f"'{c}'" for c in comp_ids)
 
     season_min, season_max = min(seasons), max(seasons)

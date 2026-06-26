@@ -40,7 +40,7 @@ KAGGLE_SLUGS = [
     "stefanoleone992/ea-sports-fc-24-complete-player-dataset",
 ]
 
-_TOP5 = "'GB1','L1','ES1','IT1','FR1'"
+_COMP_IDS = "'GB1','L1','ES1','IT1','FR1','PO1','NL1','BE1','SC1','TR1'"
 
 # Known TM -> FIFA nationality string differences
 _NATIONALITY_MAP: dict[str, str] = {
@@ -82,7 +82,7 @@ FROM transfers t
 JOIN players p   ON p.player_id = t.player_id
 JOIN clubs   fc  ON fc.club_id  = t.from_club_id
 WHERE t.transfer_fee > 0
-  AND fc.domestic_competition_id IN ({_TOP5})
+  AND fc.domestic_competition_id IN ({_COMP_IDS})
   AND (2000 + CAST(SPLIT_PART(t.transfer_season, '/', 1) AS INTEGER)) BETWEEN 2017 AND 2024
 GROUP BY t.player_id, season_int
 ORDER BY season_int, t.player_id

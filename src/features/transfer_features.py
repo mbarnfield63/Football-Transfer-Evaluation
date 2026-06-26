@@ -34,9 +34,12 @@ OUT_PATH = FEATURES_DIR / "transfer_dataset.parquet"
 SEASON_INT_MIN = 2017
 SEASON_INT_MAX = 2024
 
-LEAGUE_TIER = {"GB1": 1, "ES1": 2, "IT1": 3, "L1": 4, "FR1": 5}
+LEAGUE_TIER = {
+    "GB1": 1, "ES1": 2, "IT1": 3, "L1": 4, "FR1": 5,
+    "NL1": 6, "PO1": 7, "TR1": 8, "BE1": 9, "SC1": 10,
+}
 
-_TOP5 = "'GB1','L1','ES1','IT1','FR1'"
+_COMP_IDS = "'GB1','L1','ES1','IT1','FR1','PO1','NL1','BE1','SC1','TR1'"
 
 _TRANSFER_SQL = f"""
 WITH
@@ -53,7 +56,7 @@ top5_transfers AS (
     FROM transfers t
     JOIN clubs fc ON fc.club_id = t.from_club_id
     WHERE t.transfer_fee > 0
-      AND fc.domestic_competition_id IN ({_TOP5})
+      AND fc.domestic_competition_id IN ({_COMP_IDS})
       AND (2000 + CAST(SPLIT_PART(t.transfer_season, '/', 1) AS INTEGER))
           BETWEEN {SEASON_INT_MIN} AND {SEASON_INT_MAX}
 ),
@@ -84,7 +87,7 @@ prior_stats AS (
         COUNT(*)              AS appearances
     FROM appearances a
     JOIN games g ON g.game_id = a.game_id
-    WHERE g.competition_id IN ({_TOP5})
+    WHERE g.competition_id IN ({_COMP_IDS})
       AND g.season BETWEEN {SEASON_INT_MIN - 1} AND {SEASON_INT_MAX - 1}
     GROUP BY a.player_id, g.season
 ),
@@ -95,7 +98,7 @@ team_goals AS (
         SELECT home_club_id AS club_id, competition_id, season,
                SUM(home_club_goals) AS goals
         FROM games
-        WHERE competition_id IN ({_TOP5})
+        WHERE competition_id IN ({_COMP_IDS})
           AND season BETWEEN {SEASON_INT_MIN - 1} AND {SEASON_INT_MAX - 1}
         GROUP BY home_club_id, competition_id, season
     ),
@@ -103,7 +106,7 @@ team_goals AS (
         SELECT away_club_id AS club_id, competition_id, season,
                SUM(away_club_goals) AS goals
         FROM games
-        WHERE competition_id IN ({_TOP5})
+        WHERE competition_id IN ({_COMP_IDS})
           AND season BETWEEN {SEASON_INT_MIN - 1} AND {SEASON_INT_MAX - 1}
         GROUP BY away_club_id, competition_id, season
     )
@@ -129,7 +132,7 @@ team_totals AS (
         SUM(a.goals)          AS team_total_goals
     FROM appearances a
     JOIN games g ON g.game_id = a.game_id
-    WHERE g.competition_id IN ({_TOP5})
+    WHERE g.competition_id IN ({_COMP_IDS})
       AND g.season BETWEEN {SEASON_INT_MIN - 1} AND {SEASON_INT_MAX - 1}
     GROUP BY a.player_club_id, g.competition_id, g.season
 ),
@@ -153,7 +156,7 @@ league_spending AS (
         SUM(t.transfer_fee) AS league_transfer_spending
     FROM transfers t
     JOIN clubs cl ON cl.club_id = t.to_club_id
-    WHERE cl.domestic_competition_id IN ({_TOP5})
+    WHERE cl.domestic_competition_id IN ({_COMP_IDS})
       AND t.transfer_fee > 0
     GROUP BY cl.domestic_competition_id, season_int
 ),
@@ -167,8 +170,8 @@ inflation_index AS (
     JOIN clubs fc ON fc.club_id = t.from_club_id
     JOIN clubs tc ON tc.club_id = t.to_club_id
     WHERE t.transfer_fee > 0
-      AND (fc.domestic_competition_id IN ({_TOP5})
-           OR tc.domestic_competition_id IN ({_TOP5}))
+      AND (fc.domestic_competition_id IN ({_COMP_IDS})
+           OR tc.domestic_competition_id IN ({_COMP_IDS}))
     GROUP BY season_int
 ),
 
